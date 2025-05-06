@@ -35,7 +35,6 @@ SYMBOLS = {
     'fail': '❌'
 }
 
-
 def print_progress():
     done = progress_state.count(SYMBOLS['done'])
     fail = progress_state.count(SYMBOLS['fail'])
@@ -107,8 +106,6 @@ def build_pdf(jpg_list, output_path, fail_log=None):
     if image_list:
         os.makedirs(os.path.dirname(temp_output), exist_ok=True)
         try:
-            if not temp_output.lower().endswith('.pdf.chk'):
-                raise ValueError("Temporary output file must end with .pdf.chk")
             image_list[0].save(temp_output, save_all=True, append_images=image_list[1:], format="PDF")
             os.rename(temp_output, output_path)
         except Exception as e:
@@ -121,29 +118,46 @@ def build_pdf(jpg_list, output_path, fail_log=None):
                 f.write(path + "\n")
     return failed_files
 
+
 def process_folder_indexed(index, folder, output_dir):
     update_progress(index, 'running')
     yyyymm = extract_yyyymm(folder)
-    if not yyyymm:
-        update_progress(index, 'fail')
-        return
-    output_file = f'NGM_{yyyymm}.pdf'
-    output_path = os.path.join(output_dir, output_file)
     fail_log = os.path.join(output_dir, "failed.log")
+    try:
+        if not yyyymm:
+            with open(fail_log, "a") as f:
+                f.write(f"MISSING_YYYYMM: {folder}\n")
+            update_progress(index, 'fail')
+            return
 
-    if os.path.exists(output_path):
-        update_progress(index, 'done')
-        return
-    if os.path.exists(output_path + ".chk"):
-        os.remove(output_path + ".chk")
+        output_file = f'NGM_{yyyymm}.pdf'
+        output_path = os.path.join(output_dir, output_file)
 
-    jpgs = get_jpg_files(folder, yyyymm)
-    if not jpgs:
+        if os.path.exists(output_path):
+            update_progress(index, 'done')
+            return
+        if os.path.exists(output_path + ".chk"):
+            os.remove(output_path + ".chk")
+
+        jpgs = get_jpg_files(folder, yyyymm)
+        if not jpgs:
+            with open(fail_log, "a") as f:
+                f.write(f"NO_JPGS: {folder}\n")
+            update_progress(index, 'fail')
+            return
+
+        failed = build_pdf(jpgs, output_path, fail_log=fail_log)
+        if failed:
+            with open(fail_log, "a") as f:
+                f.write(f"IMAGE_ERRORS: {folder}\n")
+            update_progress(index, 'fail')
+        else:
+            update_progress(index, 'done')
+    except Exception as e:
+        with open(fail_log, "a") as f:
+            f.write(f"UNHANDLED_ERROR: {folder} — {str(e)}\n")
         update_progress(index, 'fail')
-        return
 
-    failed = build_pdf(jpgs, output_path, fail_log=fail_log)
-    update_progress(index, 'fail' if failed else 'done')
 
 def has_jpgs(p):
     try:
@@ -154,7 +168,7 @@ def has_jpgs(p):
 def run_batch(root, jobs, output_dir):
     global start_time
     print("Scanning directory tree under '{}'...".format(root))
-    candidates = list(Path(root).rglob("*"))
+    candidates = [p for p in Path(root).rglob("*") if p.is_dir()]
     print("Discovered {} entries, checking for folders with JPGs...".format(len(candidates)))
     with ThreadPoolExecutor(max_workers=jobs or 4) as pool:
         folders = list(filter(None, pool.map(lambda p: str(p) if has_jpgs(p) else None, candidates)))
@@ -182,6 +196,7 @@ def run_batch(root, jobs, output_dir):
             print("\n[CTRL+C] Caught KeyboardInterrupt. Cancelling all tasks.")
             executor.shutdown(wait=False, cancel_futures=True)
             raise
+    print_progress()
     print()  # final newline
 
 def main():
